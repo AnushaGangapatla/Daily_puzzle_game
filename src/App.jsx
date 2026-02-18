@@ -1,8 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { auth, provider } from "./firebase";
 import { signInWithPopup, signOut } from "firebase/auth";
 import { db } from "./db";
-import { useEffect } from "react";
+import dayjs from "dayjs";
+import { lazy, Suspense } from "react";
+
+const HeatmapContainer = lazy(() =>
+  import("./components/heatmap/HeatmapContainer")
+);
 
 
 function App() {
@@ -13,17 +18,18 @@ function App() {
   const [score, setScore] = useState(0);
   const [attempts, setAttempts] = useState(0);
   const [highScore, setHighScore] = useState(0);
+
+
   useEffect(() => {
-  const loadHighScore = async () => {
-    const saved = await db.scores.orderBy("value").last();
-    if (saved) {
-      setHighScore(saved.value);
-    }
-  };
+    const loadHighScore = async () => {
+      const saved = await db.scores.orderBy("value").last();
+      if (saved) {
+        setHighScore(saved.value);
+      }
+    };
 
-  loadHighScore();
-}, []);
-
+    loadHighScore();
+  }, []);
 
   const handleLogin = async () => {
     const result = await signInWithPopup(auth, provider);
@@ -35,26 +41,57 @@ function App() {
     setUser(null);
   };
 
-  const checkGuess = () => {
-    setScore((prev) => {
-  const newScore = prev + 1;
-
-  if (newScore > highScore) {
-    setHighScore(newScore);
-    localStorage.setItem("highScore", newScore);
-  }
-
-  return newScore;
-});
+  const checkGuess = async () => {
+    if (!guess || isNaN(guess)) {
+      setMessage("Please enter a valid number.");
+      return;
+    }
+    if (guess < 1 || guess > 10) {
+      setMessage("Number must be between 1 and 10.");
+      return;
+    }
 
     if (parseInt(guess) === number) {
+      const newScore = score + 1;
+
       setMessage("🎉 Correct! You guessed it!");
-      setScore(prev => prev + 1);
+      setScore(newScore);
+
+      // 🔥 Update High Score in IndexedDB
+      if (newScore > highScore) {
+        setHighScore(newScore);
+        await db.scores.add({ value: newScore });
+      }
+
+      // 🔥 Save Daily Activity
+      const today = dayjs().format("YYYY-MM-DD");
+
+      await db.dailyActivity.put({
+        date: today,
+        solved: true,
+        score: newScore,
+        timeTaken: 30,
+        difficulty: 1,
+        synced: false
+      });
+
+      // 🔥 Batch Sync Trigger Rule (Every 5 puzzles)
+      const unsyncedCount = await db.dailyActivity
+      .where("synced")
+      .equals(false)
+      .count();
+      if (unsyncedCount >= 5) {
+        console.log("Trigger batch sync (future backend)");
+      }
+
+
       setNumber(Math.floor(Math.random() * 10) + 1);
       setGuess("");
       setAttempts(0);
+
     } else {
       setMessage("❌ Wrong! Try again.");
+      setAttempts(prev => prev + 1);
     }
   };
 
@@ -74,7 +111,9 @@ function App() {
           </button>
         ) : (
           <>
-            <p className="mb-2 font-medium">Welcome, {user.displayName}</p>
+            <p className="mb-2 font-medium">
+              Welcome, {user.displayName}
+            </p>
 
             <button
               onClick={handleLogout}
@@ -87,7 +126,9 @@ function App() {
             <p className="font-semibold">High Score: {highScore}</p>
             <p className="mb-3">Attempts: {attempts}</p>
 
-            <p className="mb-2">Guess a number between 1 and 10</p>
+            <p className="mb-2">
+              Guess a number between 1 and 10
+            </p>
 
             <input
               type="number"
@@ -104,6 +145,13 @@ function App() {
             </button>
 
             <p className="mt-4 font-medium">{message}</p>
+
+            {/* 🔥 Heatmap Section */}
+            <h2 className="mt-6 font-bold">Your Activity</h2>
+            <Suspense fallback={<div>Loading activity...</div>}>
+              <HeatmapContainer />
+            </Suspense>
+
           </>
         )}
       </div>
